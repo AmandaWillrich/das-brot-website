@@ -1,0 +1,74 @@
+name: Update catalog
+
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: 'Catalog source: whatsapp refreshes products; published keeps the current catalog'
+        required: true
+        default: whatsapp
+        type: choice
+        options:
+          - whatsapp
+          - published
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pages: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Test catalog preparation
+        run: node --test tests/*.test.mjs
+      - name: Prepare site with selected catalog source
+        env:
+          CATALOG_SOURCE: ${{ inputs.source }}
+          WHATSAPP_APP_TOKEN: ${{ vars.WHATSAPP_APP_TOKEN }}
+          WHATSAPP_CATALOG_DOC_ID: ${{ vars.WHATSAPP_CATALOG_DOC_ID }}
+          WHATSAPP_COLLECTIONS_DOC_ID: ${{ vars.WHATSAPP_COLLECTIONS_DOC_ID }}
+        run: node scripts/update-catalog.mjs --source "$CATALOG_SOURCE"
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+      - name: Upload site artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+          retention-days: 1
+
+  deploy:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy site
+        id: deployment
+        uses: actions/deploy-pages@v4
+      - name: Record deployment
+        env:
+          PAGE_URL: ${{ steps.deployment.outputs.page_url }}
+        run: |
+          echo "### Deployment completed" >> "$GITHUB_STEP_SUMMARY"
+          echo "$PAGE_URL" >> "$GITHUB_STEP_SUMMARY"
