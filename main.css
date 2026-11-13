@@ -56,7 +56,8 @@ h1 em { color: var(--accent); font-weight: 400; }
 .hero-visual { position: relative; padding-inline: 20px 0; }
 .photo-arch { border-radius: 48% 48% 5px 5px; overflow: hidden; background: var(--paper); aspect-ratio: .97; }
 .photo-arch img { width: 100%; height: 100%; object-fit: cover; }
-.photo-caption { display: flex; justify-content: space-between; gap: 10px; margin-top: 16px; font-size: 10px; color: var(--muted); }
+.photo-caption { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px 16px; margin-top: 16px; font-size: 13px; line-height: 1.6; color: var(--muted); }
+.photo-caption strong { color: var(--accent); font-weight: 600; }
 .brand-strip { background: var(--paper); border-block: 1px solid var(--line); }
 .brand-strip .wrap { display: flex; justify-content: space-between; align-items: center; gap: 24px; padding-block: 23px; font-size: 11px; text-transform: uppercase; letter-spacing: .14em; }
 .brand-strip-illustration { width: 32px; height: 32px; object-fit: contain; flex-shrink: 0; }
