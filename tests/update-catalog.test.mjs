@@ -252,6 +252,33 @@ test('preserves text and prices in thousandths, including sale, missing and zero
     assert.throws(() => normalizeProducts([product({ name: '' })]), /Invalid data/);
 });
 
+test('skips entries without both price and currency, including informational notices', () => {
+    const notice = product({ id: '24966636516355248', name: 'Informações Importantes!',
+        price: null, sale_price: null, currency: null });
+    const missing = [null, undefined, ''];
+    const entries = missing.flatMap(price => missing.map(currency => product({ price, currency })));
+    const result = normalizeProducts([notice, ...entries, product()]);
+    assert.deepEqual(result.map(item => item.id), ['123']);
+    assert.throws(() => normalizeProducts([notice]), /No public products found/);
+});
+
+test('keeps unpriced entries with currency and validates currency for zero and sale prices', () => {
+    const result = normalizeProducts([
+        product({ price: null }), product({ price: undefined }), product({ price: '' }),
+        product({ price: 0 }), product({ price: '0' }),
+        product({ price: null, sale_price: '90000' }),
+        product({ price: '100000', sale_price: '0' }),
+    ]);
+    assert.deepEqual(result.map(item => item.priceAmount1000), [null, null, null, 0, 0, 90000, 0]);
+    for (const currency of [null, undefined, '', 'brl']) {
+        for (const prices of [{ price: '1000' }, { price: 0 }, { price: '0' },
+            { price: null, sale_price: '90000' }, { price: null, sale_price: '0' }]) {
+            assert.throws(() => normalizeProducts([product({ ...prices, currency })]), /Invalid data/);
+        }
+    }
+    assert.throws(() => normalizeProducts([product({ price: null, currency: 'brl' })]), /Invalid data/);
+});
+
 test('normalizes every image in order, deduplicates URLs and rejects invalid photos', () => {
     const first = 'https://mmg.whatsapp.net/first';
     const second = 'https://mmg.whatsapp.net/second';
@@ -313,6 +340,34 @@ test('builds a complete site with local images and replaces the previous snapsho
     assert.equal(await readFile(path.join(root, 'dist/CNAME'), 'utf8'), 'CNAME');
     assert.equal(await readFile(path.join(root, 'dist/catalogo/index.html'), 'utf8'), 'catalogo/index.html');
     assert.equal((await readdir(path.join(root, 'dist'))).includes('private.txt'), false);
+    assert.equal((await readdir(root)).some(name => name.startsWith('.catalog-build-')), false);
+});
+
+test('build excludes entries without price and currency from products and collections', async t => {
+    const root = await fixture(t);
+    const notice = product({ id: '24966636516355248', name: 'Informações Importantes!',
+        price: null, sale_price: null, currency: null,
+        media: { images: [{ original_image_url: 'https://mmg.whatsapp.net/notice' }] } });
+    const result = await buildSite({ root, fetchImpl: withCollections(async (url, options) => {
+        assert.ok(options?.body, 'Skipped entries must not trigger image downloads');
+        return Response.json(page([notice, product()]));
+    }, [collection({ products: [{ id: notice.id }, { id: '123' }] })]) });
+    assert.equal(result.productCount, 1);
+    assert.equal(result.imageCount, 0);
+    const catalog = JSON.parse(await readFile(path.join(root, 'dist/catalog.json'), 'utf8'));
+    assert.deepEqual(catalog.products.map(item => item.id), ['123']);
+    assert.deepEqual(catalog.collections[0].productIds, ['123']);
+});
+
+test('catalogs containing only entries without price and currency preserve the previous snapshot', async t => {
+    const root = await fixture(t);
+    let requests = 0;
+    await assert.rejects(buildSite({ root, fetchImpl: async () => {
+        requests++;
+        return Response.json(page([product({ price: null, currency: null })]));
+    } }), /No public products found/);
+    assert.equal(requests, 1);
+    assert.equal(await readFile(path.join(root, 'dist/catalog.json'), 'utf8'), 'previous snapshot');
     assert.equal((await readdir(root)).some(name => name.startsWith('.catalog-build-')), false);
 });
 
