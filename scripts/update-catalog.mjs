@@ -223,9 +223,14 @@ export function normalizeProducts(rawProducts) {
         const hidden = product.is_hidden;
         const sanctioned = product.is_sanctioned;
         const status = product.status_info?.status;
+        const price = product.sale_price ?? product.price;
+        const missingPrice = price == null || price === '';
+        const missingCurrency = product.currency == null || product.currency === '';
         return ![true, 'true', 'ISHIDDEN_TRUE'].includes(hidden)
             && ![true, 'true'].includes(sanctioned)
-            && (!status || status === 'APPROVED');
+            && (!status || status === 'APPROVED')
+            // Informational catalog entries can omit both price and currency.
+            && !(missingPrice && missingCurrency);
     }).map(product => {
         if (typeof product.name !== 'string' || !product.name.trim()
             || (product.description != null && typeof product.description !== 'string')
