@@ -20,6 +20,10 @@ class Element {
             removeProperty(name) { delete this[name]; },
         };
         this.scrollHeight = 500;
+        this.clientWidth = 500;
+        this.scrollWidth = 500;
+        this.scrollLeft = 0;
+        this.scrollCalls = [];
         const classes = new Set();
         this.classList = {
             add: name => classes.add(name),
@@ -37,6 +41,7 @@ class Element {
     }
     replaceChildren(...children) {
         this.children = children.flatMap(child => child.tag === '#fragment' ? child.children : [child]);
+        for (const child of this.children) child.parentElement = this;
     }
     setAttribute(name, value) { this.attributes[name] = value; }
     addEventListener(type, listener) {
@@ -65,7 +70,19 @@ class Element {
     }
     focus(options) { this.ownerDocument.activeElement = this; this.focusOptions = options; }
     setPointerCapture(id) { this.capturedPointer = id; }
-    getBoundingClientRect() { return { left: 100, right: 600, top: 100, bottom: 600, height: 100 }; }
+    scrollBy(options) {
+        this.scrollCalls.push(options);
+        this.scrollLeft = Math.max(0, Math.min(this.scrollWidth - this.clientWidth, this.scrollLeft + options.left));
+        this.dispatch('scroll');
+    }
+    getBoundingClientRect() {
+        if (this.parentElement?.isFilterTrack) {
+            const track = this.parentElement;
+            const left = 108 + track.children.indexOf(this) * 120 - track.scrollLeft;
+            return { left, right: left + 112 };
+        }
+        return { left: 100, right: 600, top: 100, bottom: 600, height: 100 };
+    }
 }
 
 const sample = {
@@ -82,10 +99,19 @@ const flushMotion = async () => {
     for (let count = 0; count < 6; count++) await Promise.resolve();
 };
 
-export async function renderCatalog({ href, request, width = 600, motion = false, reduced = false, backdropMotion = true }) {
+export async function renderCatalog({ href, request, width = 600, motion = false, reduced = false, backdropMotion = true,
+    filterLayout = { width: 500, contentWidth: 500 } }) {
     const animations = [];
-    const nodes = Object.fromEntries(['catalog-grid', 'catalog-status', 'catalog-updated', 'catalog-error', 'catalog-filters']
+    const nodes = Object.fromEntries(['catalog-grid', 'catalog-status', 'catalog-updated', 'catalog-error', 'catalog-filters',
+        'catalog-filter-navigation', 'catalog-filters-previous', 'catalog-filters-next']
         .map(id => [id, new Element('div')]));
+    const navigation = nodes['catalog-filter-navigation'];
+    const filters = nodes['catalog-filters'];
+    navigation.clientWidth = filterLayout.width;
+    filters.scrollWidth = filterLayout.contentWidth;
+    filters.isFilterTrack = true;
+    Object.defineProperty(filters, 'clientWidth', { get: () => navigation.clientWidth });
+    filters.getBoundingClientRect = () => ({ left: 100, right: 100 + filters.clientWidth });
     nodes['catalog-updated'].append(new Element('time'));
     const requests = [];
     const errors = [];
@@ -111,6 +137,8 @@ export async function renderCatalog({ href, request, width = 600, motion = false
     document.body = document.createElement('body');
     document.documentElement = document.createElement('html');
     const layoutListeners = [];
+    const resizeListeners = [];
+    const observers = [];
     const motionListeners = [];
     const preference = { matches: reduced, addEventListener: (type, listener) => motionListeners.push(listener) };
     const media = {
@@ -121,6 +149,7 @@ export async function renderCatalog({ href, request, width = 600, motion = false
         document,
         window: {
             location: new URL(href),
+            addEventListener: (type, listener) => { if (type === 'resize') resizeListeners.push(listener); },
             getComputedStyle: (node, pseudo) => pseudo
                 ? { backgroundColor: 'rgba(33, 23, 19, 0.3)' }
                 : { opacity: '0.5', transform: 'matrix(1, 0, 0, 1, 0, 6)' },
@@ -129,6 +158,10 @@ export async function renderCatalog({ href, request, width = 600, motion = false
                 assert.equal(query, '(max-width: 700px)');
                 return media;
             },
+        },
+        ResizeObserver: class {
+            constructor(callback) { observers.push(callback); }
+            observe() {}
         },
         fetch: async url => { requests.push(url.href); return request(url); },
         console: { error: (...args) => errors.push(args) },
@@ -140,12 +173,18 @@ export async function renderCatalog({ href, request, width = 600, motion = false
             preference.matches = true;
             for (const listener of motionListeners) listener();
         },
+        resizeFilters(nextWidth, contentWidth = filters.scrollWidth) {
+            navigation.clientWidth = nextWidth;
+            filters.scrollWidth = contentWidth;
+            for (const callback of observers) callback();
+        },
         resize(nextWidth) {
             const matches = nextWidth <= 700;
             if (matches !== media.matches) {
                 media.matches = matches;
                 for (const listener of layoutListeners) listener({ matches });
             }
+            for (const listener of resizeListeners) listener();
         },
     };
 }
@@ -445,6 +484,7 @@ test('network errors and invalid data show the WhatsApp fallback', async () => {
         const result = await renderCatalog({ href: 'https://dasbrotartesanal.com.br/catalogo/', request });
         assert.equal(result.requests.length, 1);
         assert.equal(result.nodes['catalog-error'].hidden, false);
+        assert.equal(result.nodes['catalog-filter-navigation'].hidden, true);
         assert.equal(result.nodes['catalog-grid'].children.length, 0);
         assert.equal(result.nodes['catalog-grid'].attributes['aria-busy'], 'false');
     }
@@ -608,30 +648,34 @@ test('crossing the breakpoint closes details and moves focus to the visible cont
     assert.equal(result.requests.length, 1);
 });
 
-test('collection filters switch visible cards, announce counts and restore all items without fetching', async () => {
+test('collection filters preserve WhatsApp order, select the first collection and put all items last', async () => {
     for (const width of [390, 1200]) {
         const products = [sample.products[0], { ...sample.products[0], id: '456', name: 'Caixa PETIT' },
             { ...sample.products[0], id: '789', name: 'Caixa sem coleção' }];
         const result = await renderCatalog({
             href: 'https://dasbrotartesanal.com.br/catalogo/', width,
             request: () => Response.json({ ...sample, products, collections: [
+                { id: 'empty', name: 'Coleção vazia', productIds: [] },
                 { id: '10', name: 'Caixas De Doces', productIds: ['123', '456'] },
                 { id: '20', name: 'Caixas De Café Da Manhã', productIds: ['123'] },
             ] }),
         });
         const filters = result.nodes['catalog-filters'];
-        const [all, sweets, breakfast] = filters.children;
+        const [sweets, breakfast, all] = filters.children;
         const cards = result.nodes['catalog-grid'].children;
         const visible = () => cards.filter(card => !card.hidden);
         assert.equal(filters.hidden, false);
         assert.deepEqual(filters.children.map(button => button.attributes['aria-label']),
-            ['Todos os itens', 'Caixas de doces', 'Caixas de café da manhã']);
+            ['Caixas de doces', 'Caixas de café da manhã', 'Todas as cestas']);
         assert.deepEqual(filters.children.map(button => button.children[0].textContent),
-            ['Todos os itens', 'Caixas de doces', 'Caixas de café da manhã']);
+            ['Caixas de doces', 'Caixas de café da manhã', 'Todas as cestas']);
         assert.deepEqual(filters.children.map(button => button.children[1].textContent),
-            ['Todos', 'Doces', 'Café da manhã']);
-        assert.equal(all.attributes['aria-pressed'], 'true');
-        assert.equal(visible().length, 3);
+            ['Doces', 'Café da manhã', 'Todas']);
+        assert.equal(sweets.attributes['aria-pressed'], 'true');
+        assert.equal(breakfast.attributes['aria-pressed'], 'false');
+        assert.equal(all.attributes['aria-pressed'], 'false');
+        assert.equal(visible().length, 2);
+        assert.equal(result.nodes['catalog-status'].textContent, '2 opções para presentear');
         const details = cards[0].querySelector('details');
         details.open = true;
         sweets.dispatch('click');
@@ -652,9 +696,128 @@ test('collection filters switch visible cards, announce counts and restore all i
         }
         all.dispatch('click');
         assert.equal(visible().length, 3);
+        assert.equal(all.attributes['aria-pressed'], 'true');
+        assert.equal(breakfast.attributes['aria-pressed'], 'false');
+        assert.equal(result.nodes['catalog-status'].textContent, '3 opções para presentear');
         assert.equal(result.requests.length, 1);
         assert.deepEqual(result.nodes['catalog-grid'].children, cards);
         assert.equal(result.errors.length, 0);
+    }
+});
+
+test('mobile filter arrows track overflow, scrolling, resizing and the desktop breakpoint', async () => {
+    const result = await renderCatalog({ href: 'https://example.com/catalogo/', width: 390,
+        filterLayout: { width: 300, contentWidth: 600 },
+        request: () => Response.json({ ...sample, collections: [
+            { id: '10', name: 'Caixas De Doces', productIds: ['123'] },
+        ] }) });
+    const filters = result.nodes['catalog-filters'];
+    const previous = result.nodes['catalog-filters-previous'];
+    const next = result.nodes['catalog-filters-next'];
+    const navigation = result.nodes['catalog-filter-navigation'];
+    assert.equal(navigation.hidden, false);
+    assert.equal(filters.clientWidth, navigation.clientWidth);
+    assert.equal(previous.hidden, true);
+    assert.equal(next.hidden, false);
+    next.dispatch('click');
+    assert.equal(filters.scrollCalls.at(-1).left, filters.clientWidth * 0.75);
+    assert.equal(filters.scrollCalls.at(-1).behavior, 'smooth');
+    assert.equal(previous.hidden, false);
+    assert.equal(next.hidden, false);
+    assert.equal(filters.clientWidth, navigation.clientWidth, 'Arrows must not reserve lateral columns');
+    // A swipe also updates the controls, independently of arrow clicks.
+    filters.scrollLeft = filters.scrollWidth - filters.clientWidth;
+    filters.dispatch('scroll');
+    assert.equal(previous.hidden, false);
+    assert.equal(next.hidden, true);
+    previous.dispatch('click');
+    assert.equal(filters.scrollCalls.at(-1).left, -filters.clientWidth * 0.75);
+    assert.equal(next.hidden, false);
+    result.resize(1200);
+    assert.equal(previous.hidden, true);
+    assert.equal(next.hidden, true);
+    assert.equal(filters.clientWidth, navigation.clientWidth);
+    result.resize(390);
+    assert.equal(next.hidden, false);
+    result.resizeFilters(700);
+    assert.equal(previous.hidden, true);
+    assert.equal(next.hidden, true);
+    assert.equal(filters.clientWidth, navigation.clientWidth);
+    result.resizeFilters(300);
+    assert.equal(next.hidden, false);
+    assert.equal(result.errors.length, 0);
+});
+
+test('mobile selection and keyboard focus reveal filters using only horizontal scrolling', async () => {
+    const result = await renderCatalog({ href: 'https://example.com/catalogo/', width: 390,
+        filterLayout: { width: 300, contentWidth: 368 },
+        request: () => Response.json({ ...sample, collections: [
+            { id: '10', name: 'Caixas De Doces', productIds: ['123'] },
+            { id: '20', name: 'Caixas De Café Da Manhã', productIds: ['123'] },
+        ] }) });
+    const filters = result.nodes['catalog-filters'];
+    const first = filters.children[0];
+    const all = filters.children.at(-1);
+    assert.equal(filters.scrollCalls.length, 0);
+    all.dispatch('click');
+    assert.equal(all.attributes['aria-pressed'], 'true');
+    assert.ok(all.getBoundingClientRect().right <= filters.getBoundingClientRect().right - 8);
+    assert.equal(filters.scrollCalls.at(-1).behavior, 'smooth');
+    first.dispatch('click');
+    assert.equal(filters.scrollLeft, 0);
+    result.reduceMotion();
+    filters.dispatch('focusin', { target: all });
+    assert.equal(filters.scrollCalls.at(-1).behavior, 'instant');
+    assert.ok(all.getBoundingClientRect().right <= filters.getBoundingClientRect().right - 8);
+    assert.equal(first.attributes['aria-pressed'], 'true', 'Focus must not change the selected collection');
+    result.nodes['catalog-filters-previous'].dispatch('click');
+    assert.equal(filters.scrollCalls.at(-1).behavior, 'instant');
+    for (const call of filters.scrollCalls) assert.deepEqual(Object.keys(call).sort(), ['behavior', 'left']);
+    assert.equal(result.requests.length, 1);
+    assert.equal(result.errors.length, 0);
+});
+
+test('selected and focused middle filters remain clear of both overlay controls on narrow screens', async () => {
+    for (const width of [320, 390]) {
+        const result = await renderCatalog({ href: 'https://example.com/catalogo/', width,
+            filterLayout: { width: width - 24, contentWidth: 608 },
+            request: () => Response.json({ ...sample, collections: [
+                { id: '10', name: 'Caixas De Doces', productIds: ['123'] },
+                { id: '20', name: 'Caixas De Café Da Manhã', productIds: ['123'] },
+                { id: '30', name: 'Caixas De Aniversário', productIds: ['123'] },
+                { id: '40', name: 'Caixas Kids', productIds: ['123'] },
+            ] }) });
+        const filters = result.nodes['catalog-filters'];
+        const middle = filters.children[2];
+        middle.dispatch('click');
+        assert.equal(result.nodes['catalog-filters-previous'].hidden, false);
+        assert.equal(result.nodes['catalog-filters-next'].hidden, false);
+        assert.ok(middle.getBoundingClientRect().left >= filters.getBoundingClientRect().left + 48);
+        assert.ok(middle.getBoundingClientRect().right <= filters.getBoundingClientRect().right - 48);
+        assert.equal(filters.clientWidth, result.nodes['catalog-filter-navigation'].clientWidth);
+
+        // Browser focus can scroll the track before the queued scroll event updates the arrows.
+        filters.scrollLeft = 0;
+        filters.dispatch('scroll');
+        filters.scrollLeft = 120;
+        const second = filters.children[1];
+        filters.dispatch('focusin', { target: second });
+        assert.ok(second.getBoundingClientRect().left >= filters.getBoundingClientRect().left + 48);
+        assert.ok(second.getBoundingClientRect().right <= filters.getBoundingClientRect().right - 48);
+        assert.equal(middle.attributes['aria-pressed'], 'true');
+        assert.equal(result.errors.length, 0);
+    }
+});
+
+test('filters without overflow keep both arrows hidden on mobile and desktop', async () => {
+    for (const width of [390, 1200]) {
+        const result = await renderCatalog({ href: 'https://example.com/catalogo/', width,
+            request: () => Response.json({ ...sample, collections: [
+                { id: '10', name: 'Caixas De Doces', productIds: ['123'] },
+            ] }) });
+        assert.equal(result.nodes['catalog-filter-navigation'].hidden, false);
+        assert.equal(result.nodes['catalog-filters-previous'].hidden, true);
+        assert.equal(result.nodes['catalog-filters-next'].hidden, true);
     }
 });
 
@@ -665,6 +828,7 @@ test('older snapshots and empty collections keep all products visible without re
             request: () => Response.json({ ...sample, collections }),
         });
         assert.equal(result.nodes['catalog-filters'].hidden, true);
+        assert.equal(result.nodes['catalog-filter-navigation'].hidden, true);
         assert.equal(result.nodes['catalog-grid'].children[0].hidden, false);
         assert.equal(result.errors.length, 0);
     }
@@ -688,8 +852,8 @@ test('prices sort ascending in every filter, with stable ties, zero first and mi
         const visibleNames = () => result.nodes['catalog-grid'].children.filter(card => !card.hidden)
             .map(card => card.querySelector('h2').textContent);
         const expected = ['Sem custo', 'Caixa menor', 'Outra caixa menor', 'Caixa maior', 'Caixa sob consulta'];
-        assert.deepEqual(visibleNames(), expected);
-        const [all, sweets] = result.nodes['catalog-filters'].children;
+        assert.deepEqual(visibleNames(), expected.slice(1));
+        const [sweets, all] = result.nodes['catalog-filters'].children;
         sweets.dispatch('click');
         assert.deepEqual(visibleNames(), expected.slice(1));
         all.dispatch('click');

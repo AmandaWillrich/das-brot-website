@@ -394,8 +394,33 @@ function productCard(product, whatsappNumber, catalogUrl) {
 
 function setupFilters(collections, productCards) {
     const filters = document.querySelector('#catalog-filters');
-    const options = [{ name: 'Todos os itens', productIds: null }, ...collections.filter(collection => collection.productIds.length)];
+    const navigation = document.querySelector('#catalog-filter-navigation');
+    const previous = document.querySelector('#catalog-filters-previous');
+    const next = document.querySelector('#catalog-filters-next');
+    const options = [...collections.filter(collection => collection.productIds.length), { name: 'Todas as cestas', productIds: null }];
     const buttons = [];
+    function updateNavigation() {
+        const overflowing = !navigation.hidden && mobileLayout.matches
+            && filters.scrollWidth > filters.clientWidth + 1;
+        previous.hidden = !overflowing || filters.scrollLeft <= 1;
+        next.hidden = !overflowing || filters.scrollLeft >= filters.scrollWidth - filters.clientWidth - 1;
+    }
+    function scrollFilters(left) {
+        filters.scrollBy({ left, behavior: reducedMotion.matches ? 'instant' : 'smooth' });
+    }
+    function revealFilter(button) {
+        if (!mobileLayout.matches || navigation.hidden) return;
+        updateNavigation();
+        const track = filters.getBoundingClientRect();
+        const bounds = button.getBoundingClientRect();
+        const leftInset = previous.hidden ? 8 : 48;
+        const rightInset = next.hidden ? 8 : 48;
+        let target = filters.scrollLeft;
+        if (bounds.left < track.left + leftInset) target += bounds.left - track.left - 48;
+        else if (bounds.right > track.right - rightInset) target += bounds.right - track.right + 48;
+        target = Math.max(0, Math.min(filters.scrollWidth - filters.clientWidth, target));
+        if (target !== filters.scrollLeft) scrollFilters(target - filters.scrollLeft);
+    }
     function selectFilter(selectedIndex) {
         const option = options[selectedIndex];
         const visibleIds = option.productIds ? new Set(option.productIds) : null;
@@ -409,11 +434,13 @@ function setupFilters(collections, productCards) {
         }
         buttons.forEach((button, index) => button.setAttribute('aria-pressed', String(index === selectedIndex)));
         status.textContent = `${count} ${count === 1 ? 'opção para presentear' : 'opções para presentear'}`;
+        revealFilter(buttons[selectedIndex]);
     }
     for (const [index, option] of options.entries()) {
-        const label = index === 0 ? option.name
+        const isAllItems = option.productIds === null;
+        const label = isAllItems ? option.name
             : option.name.charAt(0).toLocaleUpperCase('pt-BR') + option.name.slice(1).toLocaleLowerCase('pt-BR');
-        const shortName = index === 0 ? 'Todos' : label.replace(/^caixas? de\s+/i, '');
+        const shortName = isAllItems ? 'Todas' : label.replace(/^caixas? de\s+/i, '');
         const compactLabel = shortName.charAt(0).toLocaleUpperCase('pt-BR') + shortName.slice(1);
         const button = element('button', 'catalog-filter');
         button.append(element('span', 'catalog-filter-label-full', label),
@@ -426,6 +453,22 @@ function setupFilters(collections, productCards) {
     }
     filters.replaceChildren(...buttons);
     filters.hidden = options.length <= 1;
+    navigation.hidden = filters.hidden;
+    previous.addEventListener('click', () => scrollFilters(-filters.clientWidth * 0.75));
+    next.addEventListener('click', () => scrollFilters(filters.clientWidth * 0.75));
+    filters.addEventListener('scroll', updateNavigation, { passive: true });
+    filters.addEventListener('focusin', event => {
+        if (buttons.includes(event.target)) revealFilter(event.target);
+    });
+    window.addEventListener('resize', updateNavigation);
+    mobileLayout.addEventListener('change', updateNavigation);
+    if (typeof ResizeObserver !== 'undefined') {
+        const observer = new ResizeObserver(updateNavigation);
+        observer.observe(navigation);
+        observer.observe(filters);
+    }
+    document.fonts?.ready.then(updateNavigation);
+    updateNavigation();
     selectFilter(0);
 }
 
@@ -483,6 +526,7 @@ async function loadCatalog() {
         console.error('Could not load the catalog:', error);
         grid.replaceChildren();
         document.querySelector('#catalog-filters').hidden = true;
+        document.querySelector('#catalog-filter-navigation').hidden = true;
         status.textContent = 'Catálogo temporariamente indisponível';
         document.querySelector('#catalog-error').hidden = false;
     } finally {

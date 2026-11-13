@@ -47,7 +47,11 @@
 			<h1>Um presente para<br><em>cada momento.</em></h1>
 			<p class="catalog-intro">Conheça nossas caixas, descubra os sabores de cada composição e escolha como surpreender quem você ama. Atendemos em Caçador, SC.</p>
 		</div>
-		<div id="catalog-filters" class="catalog-filters" role="group" aria-label="Filtrar catálogo por coleção" hidden></div>
+		<div id="catalog-filter-navigation" class="catalog-filter-navigation" hidden>
+			<button id="catalog-filters-previous" class="catalog-filter-scroll catalog-filter-scroll-previous" type="button" aria-label="Ver coleções anteriores" aria-controls="catalog-filters" hidden><span aria-hidden="true">‹</span></button>
+			<div id="catalog-filters" class="catalog-filters" role="group" aria-label="Filtrar catálogo por coleção" hidden></div>
+			<button id="catalog-filters-next" class="catalog-filter-scroll catalog-filter-scroll-next" type="button" aria-label="Ver próximas coleções" aria-controls="catalog-filters" hidden><span aria-hidden="true">›</span></button>
+		</div>
 		<div class="catalog-toolbar">
 			<p id="catalog-status" role="status">Carregando o catálogo…</p>
 			<p id="catalog-updated" hidden>Atualizado em <time></time></p>
